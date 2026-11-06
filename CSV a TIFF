@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""
+Convierte un archivo CSV en un TIFF.
+
+Dos modos:
+  1) matriz  (por defecto): el CSV es una cuadricula de valores (filas x columnas).
+                            Cada celda del CSV = un pixel del TIFF.
+  2) puntos : el CSV tiene columnas x, y, z (por ejemplo coordenadas + valor).
+              Se rasteriza a una cuadricula con la resolucion indicada.
+
+Ejemplos:
+  python csv_a_tiff.py datos.csv salida.tif
+  python csv_a_tiff.py datos.csv salida.tif --sin-encabezado --sep ";"
+  python csv_a_tiff.py puntos.csv salida.tif --modo puntos --col-x lon --col-y lat --col-z altura --resolucion 0.001 --crs EPSG:4326
+
+Dependencias: numpy y pandas. Para el TIFF usa, en este orden de preferencia:
+rasterio (GeoTIFF con georreferencia) -> tifffile -> Pillow.
+"""
+import argparse
+import sys
+
+import numpy as np
+import pandas as pd
+
+
+# --------------------------------------------------------------------------
+# Escritura del TIFF
+# --------------------------------------------------------------------------
+def guardar_tiff(array, ruta, transform=None, crs=None, nodata=None):
+    """Guarda un array 2D en TIFF usando la mejor libreria disponible."""
+    array = np.asarray(array, dtype=np.float32)
+
+    try:
+        import rasterio
+        from rasterio.transform import Affine
+
+        if transform is None:
+            transform = Affine.identity()
+        with rasterio.open(
+            ruta, "w", driver="GTiff",
+            height=array.shape[0], width=array.shape[1],
+            count=1, dtype="float32",
+            crs=crs, transform=transform, nodata=nodata,
+            compress="deflate",
+        ) as dst:
+            dst.write(array, 1)
+        print(f"GeoTIFF guardado con rasterio: {ruta}")
+        return
+    except ImportError:
+        pass
+
+    try:
+        import tifffile
+        tifffile.imwrite(ruta, array, compression="zlib")
+        print(f"TIFF guardado con tifffile: {ruta}")
+        return
+    except ImportError:
+        pass
+
+    try:
+        from PIL import Image
+        Image.fromarray(array, mode="F").save(ruta, compression="tiff_adobe_deflate")
+        print(f"TIFF guardado con Pillow: {ruta}")
+        return
+    except ImportError:
+        sys.exit("Error: instala rasterio, tifffile o Pillow (pip install tifffile).")
+
+
+# --------------------------------------------------------------------------
+# Modo matriz
+# --------------------------------------------------------------------------
+def csv_matriz_a_array(ruta_csv, sep, sin_encabezado):
+    df = pd.read_csv(
+        ruta_csv, sep=sep,
+        header=None if sin_encabezado else 0,
+    )
+    # Fuerza todo a numerico; lo que no sea numero queda como NaN
+    df = df.apply(pd.to_numeric, errors="coerce")
+    return df.to_numpy(dtype=np.float32)
+
+
+# --------------------------------------------------------------------------
+# Modo puntos (x, y, z) -> raster
+# --------------------------------------------------------------------------
+def csv_puntos_a_array(ruta_csv, sep, col_x, col_y, col_z, resolucion):
+    from rasterio.transform import from_origin  # solo necesario en este modo
+
+    df = pd.read_csv(ruta_csv, sep=sep)
+    df = df[[col_x, col_y, col_z]].apply(pd.to_numeric, errors="coerce").dropna()
+
+    x, y, z = df[col_x].to_numpy(), df[col_y].to_numpy(), df[col_z].to_numpy()
+    xmin, xmax, ymin, ymax = x.min(), x.max(), y.min(), y.max()
+
+    ancho = int(np.floor((xmax - xmin) / resolucion)) + 1
+    alto = int(np.floor((ymax - ymin) / resolucion)) + 1
+
+    col = ((x - xmin) / resolucion).astype(int)
+    fila = ((ymax - y) / resolucion).astype(int)  # fila 0 = norte
+
+    suma = np.zeros((alto, ancho), dtype=np.float64)
+    cuenta = np.zeros((alto, ancho), dtype=np.int64)
+    np.add.at(suma, (fila, col), z)
+    np.add.at(cuenta, (fila, col), 1)
+
+    nodata = -9999.0
+    raster = np.full((alto, ancho), nodata, dtype=np.float32)
+    mask = cuenta > 0
+    raster[mask] = (suma[mask] / cuenta[mask]).astype(np.float32)  # promedio por celda
+
+    transform = from_origin(xmin, ymax, resolucion, resolucion)
+    return raster, transform, nodata
+
+
+# --------------------------------------------------------------------------
+def main():
+    p = argparse.ArgumentParser(description="Convierte un CSV a TIFF.")
+    p.add_argument("entrada", help="Archivo CSV de entrada")
+    p.add_argument("salida", help="Archivo TIFF de salida")
+    p.add_argument("--modo", choices=["matriz", "puntos"], default="matriz")
+    p.add_argument("--sep", default=",", help="Separador del CSV (por defecto ',')")
+    p.add_argument("--sin-encabezado", action="store_true",
+                   help="(matriz) el CSV no tiene fila de encabezado")
+    p.add_argument("--col-x", default="x")
+    p.add_argument("--col-y", default="y")
+    p.add_argument("--col-z", default="z")
+    p.add_argument("--resolucion", type=float, default=1.0,
+                   help="(puntos) tamano de pixel en unidades de x/y")
+    p.add_argument("--crs", default=None, help="(puntos) ej. EPSG:4326, EPSG:32719")
+    args = p.parse_args()
+
+    if args.modo == "matriz":
+        arr = csv_matriz_a_array(args.entrada, args.sep, args.sin_encabezado)
+        print(f"Matriz leida: {arr.shape[0]} filas x {arr.shape[1]} columnas")
+        guardar_tiff(arr, args.salida)
+    else:
+        arr, transform, nodata = csv_puntos_a_array(
+            args.entrada, args.sep, args.col_x, args.col_y, args.col_z, args.resolucion
+        )
+        print(f"Raster generado: {arr.shape[0]} filas x {arr.shape[1]} columnas")
+        guardar_tiff(arr, args.salida, transform=transform, crs=args.crs, nodata=nodata)
+
+
+if __name__ == "__main__":
+    main()
