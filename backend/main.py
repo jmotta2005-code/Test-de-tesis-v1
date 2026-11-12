@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+import indices
 import ml_core as ml
 
 app = FastAPI(title="Random Forest Trainer API")
@@ -118,6 +119,8 @@ def crear_dataset(
         df_y = ml.leer_archivo(archivo_y.file.read(), archivo_y.filename, hoja_y)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"No se pudo leer el archivo: {e}")
+    df_x, idx_x = indices.agregar_indices_espectrales(df_x)
+    df_y, idx_y = indices.agregar_indices_espectrales(df_y)
     did = uuid.uuid4().hex
     DATASETS[did] = {"x": df_x, "y": df_y}
     return {
@@ -125,6 +128,8 @@ def crear_dataset(
         "filas_x": len(df_x), "filas_y": len(df_y),
         "columnas_x": list(map(str, df_x.columns)),
         "columnas_y": list(map(str, df_y.columns)),
+        "indices_agregados_x": idx_x,
+        "indices_agregados_y": idx_y,
         "preview_x": a_json(df_x.head(10)),
         "preview_y": a_json(df_y.head(10)),
     }
@@ -201,6 +206,7 @@ def predecir(mid: str, archivo: UploadFile = File(...)):
         df = ml.leer_archivo(archivo.file.read(), archivo.filename)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"No se pudo leer el archivo: {e}")
+    df, _ = indices.agregar_indices_espectrales(df)
     faltan = [c for c in m["features"] if c not in df.columns]
     if faltan:
         raise HTTPException(400, f"Faltan columnas en el archivo nuevo: {faltan}")

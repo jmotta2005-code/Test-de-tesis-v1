@@ -126,7 +126,9 @@ def preparar_datos(df_x: pd.DataFrame, df_y: pd.DataFrame, o: dict):
         raise ValueError(f"La columna objetivo '{col_obj}' no está en el archivo de target.")
 
     if col_id:
-        datos = df_x.merge(df_y[[col_id, col_obj]], on=col_id, how="inner")
+        extra_y = [c for c in df_y.columns
+                   if c not in (col_id, col_obj) and c not in df_x.columns]
+        datos = df_x.merge(df_y[[col_id, col_obj] + extra_y], on=col_id, how="inner")
         if datos.empty:
             raise ValueError("La unión por ID no produjo filas. Revisa que los valores coincidan.")
     else:
@@ -136,6 +138,9 @@ def preparar_datos(df_x: pd.DataFrame, df_y: pd.DataFrame, o: dict):
                 "Usa una columna ID o corrige los datos."
             )
         datos = df_x.reset_index(drop=True).copy()
+        for c in df_y.columns:
+            if c != col_obj and c not in datos.columns:
+                datos[c] = df_y[c].reset_index(drop=True)
         datos[col_obj] = df_y[col_obj].reset_index(drop=True)
 
     info = {"filas_union": len(datos)}

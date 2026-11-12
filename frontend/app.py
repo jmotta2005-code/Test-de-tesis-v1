@@ -117,6 +117,15 @@ with st.expander("Vista previa de los datos"):
     p1.dataframe(pd.DataFrame(ds["preview_x"]))
     p2.write(f"**Target** – {ds['filas_y']} filas × {len(ds['columnas_y'])} columnas")
     p2.dataframe(pd.DataFrame(ds["preview_y"]))
+    agregados = []
+    if ds.get("indices_agregados_x"):
+        agregados.append(f"features ({len(ds['indices_agregados_x'])}): "
+                         + ", ".join(ds["indices_agregados_x"]))
+    if ds.get("indices_agregados_y"):
+        agregados.append(f"target ({len(ds['indices_agregados_y'])}): "
+                         + ", ".join(ds["indices_agregados_y"]))
+    if agregados:
+        st.caption("Índices espectrales derivados agregados — " + " · ".join(agregados))
 
 # ---------------------------------------------------------- 2. preparación
 st.subheader("3️⃣ Preparación")
